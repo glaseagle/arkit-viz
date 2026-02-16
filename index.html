@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ARKit OSC Viz</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600&family=Outfit:wght@300;500;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0f;
+    --surface: rgba(255,255,255,0.03);
+    --border: rgba(255,255,255,0.06);
+    --text: #e0e0e8;
+    --dim: #555568;
+    --accent-pos: #00ffc8;
+    --accent-rot: #ff6b9d;
+    --accent-touch: #7b61ff;
+    --accent-trail: #00ffc8;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Outfit', sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  canvas { display: block; }
+
+  /* --- HUD overlay --- */
+  #hud {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  .panel {
+    position: absolute;
+    background: var(--surface);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    pointer-events: auto;
+  }
+
+  .panel-title {
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .panel-title .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+
+  /* Position panel */
+  #panel-pos { top: 20px; left: 20px; min-width: 220px; }
+  #panel-pos .panel-title .dot { background: var(--accent-pos); box-shadow: 0 0 8px var(--accent-pos); }
+
+  /* Rotation panel */
+  #panel-rot { top: 20px; right: 20px; min-width: 220px; }
+  #panel-rot .panel-title .dot { background: var(--accent-rot); box-shadow: 0 0 8px var(--accent-rot); }
+
+  /* Touch panel */
+  #panel-touch { bottom: 20px; left: 20px; min-width: 220px; }
+  #panel-touch .panel-title .dot { background: var(--accent-touch); box-shadow: 0 0 8px var(--accent-touch); }
+
+  /* Status panel */
+  #panel-status { bottom: 20px; right: 20px; min-width: 180px; }
+
+  .data-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 3px 0;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 300;
+  }
+
+  .data-label {
+    color: var(--dim);
+    font-size: 11px;
+    font-weight: 400;
+    min-width: 24px;
+  }
+
+  .data-value {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.3px;
+  }
+
+  .data-bar {
+    width: 60px;
+    height: 3px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 2px;
+    margin-left: 12px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .data-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.08s linear;
+  }
+
+  #panel-pos .data-bar-fill { background: var(--accent-pos); }
+  #panel-rot .data-bar-fill { background: var(--accent-rot); }
+  #panel-touch .data-bar-fill { background: var(--accent-touch); }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 8px;
+    transition: background 0.3s;
+  }
+
+  .status-dot.connected { background: var(--accent-pos); box-shadow: 0 0 8px var(--accent-pos); }
+  .status-dot.disconnected { background: #ff4444; box-shadow: 0 0 8px #ff4444; }
+
+  .status-text {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--dim);
+  }
+
+  .msg-rate {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--dim);
+    margin-top: 6px;
+  }
+
+  /* Logo */
+  #logo {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 11px;
+    letter-spacing: 6px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.04);
+    pointer-events: none;
+    z-index: 5;
+    white-space: nowrap;
+  }
+
+  /* Raw OSC log */
+  #raw-log {
+    position: fixed;
+    bottom: 80px;
+    right: 20px;
+    width: 300px;
+    max-height: 200px;
+    overflow-y: auto;
+    pointer-events: auto;
+    z-index: 10;
+    scrollbar-width: none;
+  }
+  #raw-log::-webkit-scrollbar { display: none; }
+
+  .raw-entry {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--dim);
+    padding: 2px 0;
+    opacity: 0.6;
+    border-bottom: 1px solid rgba(255,255,255,0.02);
+  }
+  .raw-entry .addr { color: var(--accent-pos); opacity: 0.7; }
+
+  /* --- Alignment tool panel --- */
+  #panel-align {
+    position: fixed;
+    top: 50%;
+    left: 20px;
+    transform: translateY(-50%);
+    background: var(--surface);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    pointer-events: auto;
+    z-index: 20;
+    min-width: 240px;
+    max-height: 80vh;
+    overflow-y: auto;
+    scrollbar-width: none;
+    transition: transform 0.3s, opacity 0.3s;
+  }
+  #panel-align::-webkit-scrollbar { display: none; }
+  #panel-align.collapsed {
+    transform: translateY(-50%) translateX(-260px);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  #align-toggle {
+    position: fixed;
+    top: 50%;
+    left: 20px;
+    transform: translateY(-50%);
+    background: var(--surface);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    pointer-events: auto;
+    z-index: 19;
+    cursor: pointer;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent-rot);
+    letter-spacing: 1px;
+    transition: opacity 0.3s;
+  }
+  #align-toggle.hidden { opacity: 0; pointer-events: none; }
+
+  .align-section {
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .align-section:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+
+  .align-title {
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .align-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .align-row label {
+    min-width: 50px;
+    color: var(--dim);
+    font-size: 11px;
+  }
+
+  .align-row select {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 6px;
+    cursor: pointer;
+    outline: none;
+  }
+  .align-row select:focus { border-color: var(--accent-rot); }
+
+  .neg-btn {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--dim);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 3px 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+    min-width: 28px;
+    text-align: center;
+  }
+  .neg-btn:hover { border-color: var(--accent-rot); color: var(--text); }
+  .neg-btn.active { background: var(--accent-rot); color: #0a0a0f; border-color: var(--accent-rot); }
+
+  .preset-btn {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--dim);
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .preset-btn:hover { border-color: var(--accent-pos); color: var(--text); }
+
+  .close-btn {
+    background: none;
+    border: none;
+    color: var(--dim);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .close-btn:hover { color: var(--text); }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <!-- Position -->
+  <div class="panel" id="panel-pos">
+    <div class="panel-title"><span class="dot"></span>POSITION</div>
+    <div class="data-row">
+      <span class="data-label">X</span>
+      <span class="data-value" id="pos-x">0.000</span>
+      <div class="data-bar"><div class="data-bar-fill" id="bar-px" style="width:50%"></div></div>
+    </div>
+    <div class="data-row">
+      <span class="data-label">Y</span>
+      <span class="data-value" id="pos-y">0.000</span>
+      <div class="data-bar"><div class="data-bar-fill" id="bar-py" style="width:50%"></div></div>
+    </div>
+    <div class="data-row">
+      <span class="data-label">Z</span>
+      <span class="data-value" id="pos-z">0.000</span>
+      <div class="data-bar"><div class="data-bar-fill" id="bar-pz" style="width:50%"></div></div>
+    </div>
+  </div>
+
+  <!-- Rotation -->
+  <div class="panel" id="panel-rot">
+    <div class="panel-title"><span class="dot"></span>ROTATION</div>
+    <div class="data-row">
+      <span class="data-label">W</span>
+      <span class="data-value" id="rot-w">1.000</span>
+      <div class="data-bar"><div class="data-bar-fill" id="bar-rw" style="width:100%"></div></div>
+    </div>
+    <div class="data-row">
+      <span class="data-label">X</span>
+      <span class="data-value" id="rot-x">0.000</span>
+      <div class="data-bar"><div class="data-bar-fill" id="bar-rx" style="width:50%"></div></div>
+    </div>
+    <div class="data-row">
+      <span class="data-label">Y</span>
+      <span class="data-value" id="rot-y">0.000</span>
+      <div class="data-bar"><div class="data-bar-fill" id="bar-ry" style="width:50%"></div></div>
+    </div>
+    <div class="data-row">
+      <span class="data-label">Z</span>
+      <span class="data-value" id="rot-z">0.000</span>
+      <div class="data-bar"><div class="data-bar-fill" id="bar-rz" style="width:50%"></div></div>
+    </div>
+  </div>
+
+  <!-- Touch -->
+  <div class="panel" id="panel-touch">
+    <div class="panel-title"><span class="dot"></span>TOUCH</div>
+    <div class="data-row">
+      <span class="data-label">X</span>
+      <span class="data-value" id="touch-x">—</span>
+      <div class="data-bar"><div class="data-bar-fill" id="bar-tx" style="width:0%"></div></div>
+    </div>
+    <div class="data-row">
+      <span class="data-label">Y</span>
+      <span class="data-value" id="touch-y">—</span>
+      <div class="data-bar"><div class="data-bar-fill" id="bar-ty" style="width:0%"></div></div>
+    </div>
+    <div class="data-row">
+      <span class="data-label">R</span>
+      <span class="data-value" id="touch-r">—</span>
+      <div class="data-bar"><div class="data-bar-fill" id="bar-tr" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div class="panel" id="panel-status">
+    <div style="display:flex;align-items:center;">
+      <span class="status-dot disconnected" id="status-dot"></span>
+      <span class="status-text" id="status-text">Connecting...</span>
+    </div>
+    <div class="msg-rate">OSC: <span id="msg-rate">0</span> msg/s</div>
+  </div>
+</div>
+
+<div id="align-toggle" class="hidden" onclick="toggleAlign()">ALIGN</div>
+
+<div id="panel-align">
+  <div class="align-title">
+    <span style="color:var(--accent-rot)">AXIS ALIGNMENT</span>
+    <button class="close-btn" onclick="toggleAlign()">&times;</button>
+  </div>
+
+  <!-- Quaternion order -->
+  <div class="align-section">
+    <div class="align-title">QUAT ORDER</div>
+    <div class="align-row">
+      <label>Input</label>
+      <select id="quat-order" onchange="saveAlign()">
+        <option value="wxyz">W X Y Z</option>
+        <option value="xyzw">X Y Z W</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Rotation axis mapping -->
+  <div class="align-section">
+    <div class="align-title">ROTATION REMAP</div>
+    <div class="align-row">
+      <label>Qx &rarr;</label>
+      <select id="rot-map-x" onchange="saveAlign()">
+        <option value="x">X</option><option value="y">Y</option><option value="z">Z</option>
+      </select>
+      <button class="neg-btn" id="rot-neg-x" onclick="toggleNeg(this)">+</button>
+    </div>
+    <div class="align-row">
+      <label>Qy &rarr;</label>
+      <select id="rot-map-y" onchange="saveAlign()">
+        <option value="x">X</option><option value="y" selected>Y</option><option value="z">Z</option>
+      </select>
+      <button class="neg-btn" id="rot-neg-y" onclick="toggleNeg(this)">+</button>
+    </div>
+    <div class="align-row">
+      <label>Qz &rarr;</label>
+      <select id="rot-map-z" onchange="saveAlign()">
+        <option value="x">X</option><option value="y">Y</option><option value="z" selected>Z</option>
+      </select>
+      <button class="neg-btn" id="rot-neg-z" onclick="toggleNeg(this)">+</button>
+    </div>
+    <div class="align-row">
+      <label>Qw</label>
+      <span style="color:var(--dim);font-size:11px">negate:</span>
+      <button class="neg-btn" id="rot-neg-w" onclick="toggleNeg(this)">+</button>
+    </div>
+  </div>
+
+  <!-- Position axis mapping -->
+  <div class="align-section">
+    <div class="align-title">POSITION REMAP</div>
+    <div class="align-row">
+      <label>Px &rarr;</label>
+      <select id="pos-map-x" onchange="saveAlign()">
+        <option value="x">X</option><option value="y">Y</option><option value="z">Z</option>
+      </select>
+      <button class="neg-btn" id="pos-neg-x" onclick="toggleNeg(this)">+</button>
+    </div>
+    <div class="align-row">
+      <label>Py &rarr;</label>
+      <select id="pos-map-y" onchange="saveAlign()">
+        <option value="x">X</option><option value="y" selected>Y</option><option value="z">Z</option>
+      </select>
+      <button class="neg-btn" id="pos-neg-y" onclick="toggleNeg(this)">+</button>
+    </div>
+    <div class="align-row">
+      <label>Pz &rarr;</label>
+      <select id="pos-map-z" onchange="saveAlign()">
+        <option value="x">X</option><option value="y">Y</option><option value="z" selected>Z</option>
+      </select>
+      <button class="neg-btn" id="pos-neg-z" onclick="toggleNeg(this)">+</button>
+    </div>
+  </div>
+
+  <!-- Presets -->
+  <div class="align-section">
+    <div class="align-title">PRESETS</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+      <button class="preset-btn" onclick="applyPreset('default')">Default</button>
+      <button class="preset-btn" onclick="applyPreset('arkit-yup')">ARKit Y-Up</button>
+      <button class="preset-btn" onclick="applyPreset('arkit-zup')">ARKit Z-Up</button>
+      <button class="preset-btn" onclick="applyPreset('unity')">Unity</button>
+    </div>
+  </div>
+</div>
+
+<div id="logo">ARKIT OSC</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.162.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.162.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ---- Scene setup ----
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x0a0a0f, 0.08);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(3, 2.5, 4);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x0a0a0f);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+document.body.prepend(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.minDistance = 1;
+controls.maxDistance = 20;
+
+// ---- Lights ----
+const ambient = new THREE.AmbientLight(0x334455, 0.6);
+scene.add(ambient);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+dirLight.position.set(5, 8, 4);
+scene.add(dirLight);
+
+const rimLight = new THREE.DirectionalLight(0x00ffc8, 0.3);
+rimLight.position.set(-3, 2, -4);
+scene.add(rimLight);
+
+// ---- Ground grid ----
+const gridHelper = new THREE.GridHelper(20, 40, 0x1a1a2e, 0x111122);
+gridHelper.material.opacity = 0.5;
+gridHelper.material.transparent = true;
+scene.add(gridHelper);
+
+// Ground plane (subtle)
+const groundGeo = new THREE.PlaneGeometry(20, 20);
+const groundMat = new THREE.MeshStandardMaterial({
+  color: 0x0a0a12, transparent: true, opacity: 0.8
+});
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.01;
+scene.add(ground);
+
+// ---- Device mesh (phone shape) ----
+const deviceGroup = new THREE.Group();
+
+const phoneGeo = new THREE.BoxGeometry(0.08, 0.16, 0.008);
+const phoneMat = new THREE.MeshStandardMaterial({
+  color: 0x222233,
+  metalness: 0.7,
+  roughness: 0.2,
+  emissive: 0x111122,
+  emissiveIntensity: 0.3
+});
+const phone = new THREE.Mesh(phoneGeo, phoneMat);
+deviceGroup.add(phone);
+
+// Screen
+const screenGeo = new THREE.PlaneGeometry(0.065, 0.135);
+const screenMat = new THREE.MeshStandardMaterial({
+  color: 0x0a0a1a, emissive: 0x00ffc8, emissiveIntensity: 0.05, metalness: 0.1, roughness: 0.3
+});
+const screen = new THREE.Mesh(screenGeo, screenMat);
+screen.position.z = 0.0045;
+deviceGroup.add(screen);
+
+// Camera dot
+const camDotGeo = new THREE.CircleGeometry(0.004, 16);
+const camDotMat = new THREE.MeshBasicMaterial({ color: 0x00ffc8 });
+const camDot = new THREE.Mesh(camDotGeo, camDotMat);
+camDot.position.set(0, 0.065, 0.0046);
+deviceGroup.add(camDot);
+
+// Axes helper on device
+const axesHelper = new THREE.AxesHelper(0.15);
+deviceGroup.add(axesHelper);
+
+scene.add(deviceGroup);
+
+// ---- Orientation ring ----
+const ringGeo = new THREE.TorusGeometry(0.12, 0.002, 8, 64);
+const ringMat = new THREE.MeshBasicMaterial({ color: 0xff6b9d, transparent: true, opacity: 0.4 });
+const ring = new THREE.Mesh(ringGeo, ringMat);
+deviceGroup.add(ring);
+
+// ---- Forward direction indicator ----
+const arrowGeo = new THREE.ConeGeometry(0.01, 0.04, 8);
+const arrowMat = new THREE.MeshBasicMaterial({ color: 0x00ffc8, transparent: true, opacity: 0.8 });
+const arrow = new THREE.Mesh(arrowGeo, arrowMat);
+arrow.rotation.x = Math.PI / 2;
+arrow.position.z = 0.14;
+deviceGroup.add(arrow);
+
+// ---- Trail system ----
+const MAX_TRAIL = 600;
+const trailPositions = new Float32Array(MAX_TRAIL * 3);
+const trailColors = new Float32Array(MAX_TRAIL * 3);
+const trailGeo = new THREE.BufferGeometry();
+trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+trailGeo.setAttribute('color', new THREE.BufferAttribute(trailColors, 3));
+trailGeo.setDrawRange(0, 0);
+
+const trailMat = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.7 });
+const trail = new THREE.Line(trailGeo, trailMat);
+scene.add(trail);
+
+let trailCount = 0;
+const trailColor = new THREE.Color(0x00ffc8);
+
+function addTrailPoint(x, y, z) {
+  if (trailCount < MAX_TRAIL) {
+    trailPositions[trailCount * 3] = x;
+    trailPositions[trailCount * 3 + 1] = y;
+    trailPositions[trailCount * 3 + 2] = z;
+    const fade = trailCount / MAX_TRAIL;
+    trailColors[trailCount * 3] = trailColor.r * (0.2 + fade * 0.8);
+    trailColors[trailCount * 3 + 1] = trailColor.g * (0.2 + fade * 0.8);
+    trailColors[trailCount * 3 + 2] = trailColor.b * (0.2 + fade * 0.8);
+    trailCount++;
+  } else {
+    // Shift buffer
+    trailPositions.copyWithin(0, 3);
+    trailColors.copyWithin(0, 3);
+    const i = (MAX_TRAIL - 1) * 3;
+    trailPositions[i] = x;
+    trailPositions[i + 1] = y;
+    trailPositions[i + 2] = z;
+    trailColors[i] = trailColor.r;
+    trailColors[i + 1] = trailColor.g;
+    trailColors[i + 2] = trailColor.b;
+  }
+  trailGeo.attributes.position.needsUpdate = true;
+  trailGeo.attributes.color.needsUpdate = true;
+  trailGeo.setDrawRange(0, Math.min(trailCount, MAX_TRAIL));
+}
+
+// ---- Touch spheres ----
+const touchSpheres = [];
+const MAX_TOUCH_SPHERES = 5;
+for (let i = 0; i < MAX_TOUCH_SPHERES; i++) {
+  const geo = new THREE.SphereGeometry(0.02, 16, 16);
+  const mat = new THREE.MeshBasicMaterial({
+    color: 0x7b61ff, transparent: true, opacity: 0
+  });
+  const sphere = new THREE.Mesh(geo, mat);
+  sphere.userData.life = 0;
+  scene.add(sphere);
+  touchSpheres.push(sphere);
+
+  // Glow ring
+  const glowGeo = new THREE.RingGeometry(0.025, 0.045, 32);
+  const glowMat = new THREE.MeshBasicMaterial({
+    color: 0x7b61ff, transparent: true, opacity: 0, side: THREE.DoubleSide
+  });
+  const glow = new THREE.Mesh(glowGeo, glowMat);
+  glow.rotation.x = -Math.PI / 2;
+  sphere.add(glow);
+  sphere.userData.glow = glow;
+}
+let touchIdx = 0;
+
+function spawnTouch(x, y, radius) {
+  const s = touchSpheres[touchIdx % MAX_TOUCH_SPHERES];
+  // Map touch XY (0-1 normalized) into 3D space relative to device
+  const worldX = deviceGroup.position.x + (x - 0.5) * 0.3;
+  const worldY = deviceGroup.position.y + (0.5 - y) * 0.3;
+  const worldZ = deviceGroup.position.z;
+  s.position.set(worldX, worldY, worldZ);
+  const r = radius || 0.02;
+  s.scale.setScalar(r * 3 + 1);
+  s.material.opacity = 1;
+  s.userData.glow.material.opacity = 0.6;
+  s.userData.life = 1.0;
+  touchIdx++;
+}
+
+// ---- Origin marker ----
+const originGeo = new THREE.OctahedronGeometry(0.03, 0);
+const originMat = new THREE.MeshBasicMaterial({ color: 0x334455, wireframe: true });
+const origin = new THREE.Mesh(originGeo, originMat);
+scene.add(origin);
+
+// ---- Alignment config ----
+const align = {
+  quatOrder: 'wxyz', // or 'xyzw'
+  rot: { mapX: 'x', mapY: 'y', mapZ: 'z', negX: false, negY: false, negZ: false, negW: false },
+  pos: { mapX: 'x', mapY: 'y', mapZ: 'z', negX: false, negY: false, negZ: false }
+};
+
+// Load from localStorage
+try {
+  const saved = JSON.parse(localStorage.getItem('arkit-align'));
+  if (saved) Object.assign(align, saved);
+} catch(e) {}
+
+// Expose to global for inline handlers
+window.toggleAlign = () => {
+  const panel = document.getElementById('panel-align');
+  const btn = document.getElementById('align-toggle');
+  panel.classList.toggle('collapsed');
+  btn.classList.toggle('hidden');
+};
+window.toggleNeg = (el) => {
+  el.classList.toggle('active');
+  el.textContent = el.classList.contains('active') ? '−' : '+';
+  saveAlign();
+};
+window.saveAlign = () => {
+  align.quatOrder = document.getElementById('quat-order').value;
+  align.rot.mapX = document.getElementById('rot-map-x').value;
+  align.rot.mapY = document.getElementById('rot-map-y').value;
+  align.rot.mapZ = document.getElementById('rot-map-z').value;
+  align.rot.negX = document.getElementById('rot-neg-x').classList.contains('active');
+  align.rot.negY = document.getElementById('rot-neg-y').classList.contains('active');
+  align.rot.negZ = document.getElementById('rot-neg-z').classList.contains('active');
+  align.rot.negW = document.getElementById('rot-neg-w').classList.contains('active');
+  align.pos.mapX = document.getElementById('pos-map-x').value;
+  align.pos.mapY = document.getElementById('pos-map-y').value;
+  align.pos.mapZ = document.getElementById('pos-map-z').value;
+  align.pos.negX = document.getElementById('pos-neg-x').classList.contains('active');
+  align.pos.negY = document.getElementById('pos-neg-y').classList.contains('active');
+  align.pos.negZ = document.getElementById('pos-neg-z').classList.contains('active');
+  localStorage.setItem('arkit-align', JSON.stringify(align));
+};
+
+function setNegBtn(id, active) {
+  const el = document.getElementById(id);
+  if (active) { el.classList.add('active'); el.textContent = '−'; }
+  else { el.classList.remove('active'); el.textContent = '+'; }
+}
+
+// Restore UI from saved align
+function restoreAlignUI() {
+  document.getElementById('quat-order').value = align.quatOrder;
+  document.getElementById('rot-map-x').value = align.rot.mapX;
+  document.getElementById('rot-map-y').value = align.rot.mapY;
+  document.getElementById('rot-map-z').value = align.rot.mapZ;
+  setNegBtn('rot-neg-x', align.rot.negX);
+  setNegBtn('rot-neg-y', align.rot.negY);
+  setNegBtn('rot-neg-z', align.rot.negZ);
+  setNegBtn('rot-neg-w', align.rot.negW);
+  document.getElementById('pos-map-x').value = align.pos.mapX;
+  document.getElementById('pos-map-y').value = align.pos.mapY;
+  document.getElementById('pos-map-z').value = align.pos.mapZ;
+  setNegBtn('pos-neg-x', align.pos.negX);
+  setNegBtn('pos-neg-y', align.pos.negY);
+  setNegBtn('pos-neg-z', align.pos.negZ);
+}
+restoreAlignUI();
+
+window.applyPreset = (name) => {
+  const presets = {
+    'default': {
+      quatOrder:'wxyz',
+      rot:{mapX:'x',mapY:'y',mapZ:'z',negX:false,negY:false,negZ:false,negW:false},
+      pos:{mapX:'x',mapY:'y',mapZ:'z',negX:false,negY:false,negZ:false}
+    },
+    'arkit-yup': {
+      quatOrder:'xyzw',
+      rot:{mapX:'x',mapY:'y',mapZ:'z',negX:true,negY:false,negZ:true,negW:false},
+      pos:{mapX:'x',mapY:'y',mapZ:'z',negX:false,negY:false,negZ:true}
+    },
+    'arkit-zup': {
+      quatOrder:'xyzw',
+      rot:{mapX:'x',mapY:'z',mapZ:'y',negX:true,negY:false,negZ:false,negW:false},
+      pos:{mapX:'x',mapY:'z',mapZ:'y',negX:false,negY:false,negZ:true}
+    },
+    'unity': {
+      quatOrder:'xyzw',
+      rot:{mapX:'x',mapY:'y',mapZ:'z',negX:true,negY:false,negZ:true,negW:false},
+      pos:{mapX:'x',mapY:'y',mapZ:'z',negX:true,negY:false,negZ:false}
+    }
+  };
+  const p = presets[name];
+  if (!p) return;
+  Object.assign(align, JSON.parse(JSON.stringify(p)));
+  restoreAlignUI();
+  saveAlign();
+};
+
+function applyRotAlign(rawW, rawX, rawY, rawZ) {
+  const src = { x: rawX, y: rawY, z: rawZ };
+  const mx = (align.rot.negX ? -1 : 1) * src[align.rot.mapX];
+  const my = (align.rot.negY ? -1 : 1) * src[align.rot.mapY];
+  const mz = (align.rot.negZ ? -1 : 1) * src[align.rot.mapZ];
+  const mw = (align.rot.negW ? -1 : 1) * rawW;
+  return { w: mw, x: mx, y: my, z: mz };
+}
+
+function applyPosAlign(rawX, rawY, rawZ) {
+  const src = { x: rawX, y: rawY, z: rawZ };
+  const mx = (align.pos.negX ? -1 : 1) * src[align.pos.mapX];
+  const my = (align.pos.negY ? -1 : 1) * src[align.pos.mapY];
+  const mz = (align.pos.negZ ? -1 : 1) * src[align.pos.mapZ];
+  return { x: mx, y: my, z: mz };
+}
+
+// ---- State ----
+const state = {
+  pos: { x: 0, y: 0, z: 0 },
+  rot: { w: 1, x: 0, y: 0, z: 0 },
+  touch: { x: 0, y: 0, r: 0 },
+  connected: false
+};
+
+let msgCount = 0;
+let lastMsgCount = 0;
+
+// ---- HUD update ----
+const fmt = (v) => v >= 0 ? ' ' + v.toFixed(3) : v.toFixed(3);
+const barPct = (v, range) => Math.min(100, Math.max(0, ((v + range) / (2 * range)) * 100));
+const barPctAbs = (v) => Math.min(100, Math.max(0, ((v + 1) / 2) * 100));
+
+function updateHUD() {
+  document.getElementById('pos-x').textContent = fmt(state.pos.x);
+  document.getElementById('pos-y').textContent = fmt(state.pos.y);
+  document.getElementById('pos-z').textContent = fmt(state.pos.z);
+  document.getElementById('bar-px').style.width = barPct(state.pos.x, 5) + '%';
+  document.getElementById('bar-py').style.width = barPct(state.pos.y, 5) + '%';
+  document.getElementById('bar-pz').style.width = barPct(state.pos.z, 5) + '%';
+
+  document.getElementById('rot-w').textContent = fmt(state.rot.w);
+  document.getElementById('rot-x').textContent = fmt(state.rot.x);
+  document.getElementById('rot-y').textContent = fmt(state.rot.y);
+  document.getElementById('rot-z').textContent = fmt(state.rot.z);
+  document.getElementById('bar-rw').style.width = barPctAbs(state.rot.w) + '%';
+  document.getElementById('bar-rx').style.width = barPctAbs(state.rot.x) + '%';
+  document.getElementById('bar-ry').style.width = barPctAbs(state.rot.y) + '%';
+  document.getElementById('bar-rz').style.width = barPctAbs(state.rot.z) + '%';
+
+  document.getElementById('touch-x').textContent = state.touch.x ? fmt(state.touch.x) : '—';
+  document.getElementById('touch-y').textContent = state.touch.y ? fmt(state.touch.y) : '—';
+  document.getElementById('touch-r').textContent = state.touch.r ? fmt(state.touch.r) : '—';
+  document.getElementById('bar-tx').style.width = (state.touch.x * 100 || 0) + '%';
+  document.getElementById('bar-ty').style.width = (state.touch.y * 100 || 0) + '%';
+  document.getElementById('bar-tr').style.width = (state.touch.r * 200 || 0) + '%';
+}
+
+// ---- Message rate counter ----
+setInterval(() => {
+  document.getElementById('msg-rate').textContent = msgCount - lastMsgCount;
+  lastMsgCount = msgCount;
+}, 1000);
+
+// ---- WebSocket ----
+let ws;
+let reconnectTimer;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}`);
+
+  ws.onopen = () => {
+    state.connected = true;
+    document.getElementById('status-dot').className = 'status-dot connected';
+    document.getElementById('status-text').textContent = 'Connected';
+    clearTimeout(reconnectTimer);
+  };
+
+  ws.onclose = () => {
+    state.connected = false;
+    document.getElementById('status-dot').className = 'status-dot disconnected';
+    document.getElementById('status-text').textContent = 'Disconnected';
+    reconnectTimer = setTimeout(connect, 2000);
+  };
+
+  ws.onmessage = (evt) => {
+    msgCount++;
+    const data = JSON.parse(evt.data);
+
+    if (data.type === 'position' && data.values.length >= 3) {
+      const p = applyPosAlign(data.values[0], data.values[1], data.values[2]);
+      state.pos.x = p.x;
+      state.pos.y = p.y;
+      state.pos.z = p.z;
+    } else if (data.type === 'rotation' && data.values.length >= 4) {
+      let rw, rx, ry, rz;
+      if (align.quatOrder === 'xyzw') {
+        rx = data.values[0]; ry = data.values[1]; rz = data.values[2]; rw = data.values[3];
+      } else {
+        rw = data.values[0]; rx = data.values[1]; ry = data.values[2]; rz = data.values[3];
+      }
+      const r = applyRotAlign(rw, rx, ry, rz);
+      state.rot.w = r.w;
+      state.rot.x = r.x;
+      state.rot.y = r.y;
+      state.rot.z = r.z;
+    } else if (data.type === 'touch') {
+      state.touch.x = data.values[0] || 0;
+      state.touch.y = data.values[1] || 0;
+      state.touch.r = data.values[2] || 0.02;
+      spawnTouch(state.touch.x, state.touch.y, state.touch.r);
+    } else if (data.type === 'raw') {
+      addRawLog(data.address, data.values);
+    }
+  };
+}
+connect();
+
+// ---- Raw log ----
+function addRawLog(addr, values) {
+  const el = document.getElementById('raw-log');
+  if (!el) return;
+  const entry = document.createElement('div');
+  entry.className = 'raw-entry';
+  entry.innerHTML = `<span class="addr">${addr}</span> ${values.map(v => typeof v === 'number' ? v.toFixed(3) : v).join(' ')}`;
+  el.prepend(entry);
+  while (el.children.length > 20) el.removeChild(el.lastChild);
+}
+
+// ---- Smoothing ----
+const smoothPos = { x: 0, y: 0, z: 0 };
+const smoothQuat = new THREE.Quaternion(0, 0, 0, 1);
+const targetQuat = new THREE.Quaternion(0, 0, 0, 1);
+const LERP = 0.15;
+
+let lastTrailTime = 0;
+const TRAIL_INTERVAL = 50; // ms between trail points
+
+// ---- Animate ----
+function animate(time) {
+  requestAnimationFrame(animate);
+
+  // Smooth position
+  smoothPos.x += (state.pos.x - smoothPos.x) * LERP;
+  smoothPos.y += (state.pos.y - smoothPos.y) * LERP;
+  smoothPos.z += (state.pos.z - smoothPos.z) * LERP;
+  deviceGroup.position.set(smoothPos.x, smoothPos.y, smoothPos.z);
+
+  // Smooth rotation
+  targetQuat.set(state.rot.x, state.rot.y, state.rot.z, state.rot.w);
+  smoothQuat.slerp(targetQuat, LERP);
+  deviceGroup.quaternion.copy(smoothQuat);
+
+  // Trail
+  if (time - lastTrailTime > TRAIL_INTERVAL) {
+    addTrailPoint(smoothPos.x, smoothPos.y, smoothPos.z);
+    lastTrailTime = time;
+  }
+
+  // Fade touch spheres
+  for (const s of touchSpheres) {
+    if (s.userData.life > 0) {
+      s.userData.life -= 0.015;
+      s.material.opacity = s.userData.life * 0.8;
+      s.userData.glow.material.opacity = s.userData.life * 0.4;
+      s.userData.glow.scale.setScalar(1 + (1 - s.userData.life) * 2);
+    }
+  }
+
+  // Spin origin marker
+  origin.rotation.y += 0.01;
+  origin.rotation.x += 0.005;
+
+  // Subtle screen pulse
+  screenMat.emissiveIntensity = 0.03 + Math.sin(time * 0.002) * 0.02;
+
+  controls.update();
+  updateHUD();
+  renderer.render(scene, camera);
+}
+
+animate(0);
+
+// ---- Resize ----
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+
+<div id="raw-log"></div>
+
+</body>
+</html>
