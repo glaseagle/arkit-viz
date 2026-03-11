@@ -2,13 +2,29 @@ const osc = require("osc");
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const WebSocket = require("ws");
 
-const HTTP_PORT = 3001;
+const HTTP_PORT = 3006;
 const OSC_PORT = 3333;
 
 // --- HTTP Server ---
+function getLanIP() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name]) {
+      if (net.family === "IPv4" && !net.internal) return net.address;
+    }
+  }
+  return "127.0.0.1";
+}
+
 const server = http.createServer((req, res) => {
+  if (req.url === "/api/ip") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ip: getLanIP(), oscPort: OSC_PORT }));
+    return;
+  }
   let filePath = req.url === "/" ? "/index.html" : req.url;
   const ext = path.extname(filePath);
   const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };

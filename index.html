@@ -404,6 +404,7 @@
       <span class="status-text" id="status-text">Connecting...</span>
     </div>
     <div class="msg-rate">OSC: <span id="msg-rate">0</span> msg/s</div>
+    <div class="msg-rate" style="margin-top:8px;user-select:all;color:var(--accent-pos);" id="ip-display">Loading IP...</div>
   </div>
 </div>
 
@@ -916,6 +917,13 @@ function connect() {
   };
 }
 connect();
+
+// ---- Fetch LAN IP ----
+fetch('/api/ip').then(r => r.json()).then(d => {
+  document.getElementById('ip-display').textContent = `${d.ip}:${d.oscPort}`;
+}).catch(() => {
+  document.getElementById('ip-display').textContent = 'IP unavailable';
+});
 
 // ---- Raw log ----
 function addRawLog(addr, values) {
